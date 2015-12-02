@@ -10,6 +10,7 @@ import java.io.Writer;
 import java.util.HashSet;
 import java.util.Scanner;
 import java.util.Set;
+import java.util.Vector;
 
 import org.joda.time.DateTime;
 
@@ -85,7 +86,8 @@ public class BibtexCleaner {
 	     * Now for each original entry
 	     */
 	    DBLPQueryParser dblpQuery = new DBLPQueryParser();
-
+	    Vector<BibtexEntry[]> rememberedEntries = new Vector<BibtexEntry[]>();
+	    
 	    System.out.println("There are " + file.getEntries().size() + " entries to parse");
 
 	    System.out.println("We expect to finish around "
@@ -150,37 +152,13 @@ public class BibtexCleaner {
 			    continue;
 			}
 			if (dblpQuery.getNrOfResults() > 1) {
-			    System.out.println(" We got too many results, please choose the best option.");
-			    System.out.println(" Original: ");
-			    System.out.println(BibtexCleaner.bibtexEntryToString(entry));
+			    System.out.println(" We got too many results, remembering and letting user choose best option later.");
+			    BibtexEntry[] r = new BibtexEntry[dblpQuery.getNrOfResults() + 1];
+			    r[0] = entry;
 			    for (int i = 0; i < dblpQuery.getNrOfResults(); i++) {
-				System.out.println(" SUGGESTION " + i + ":");
-				System.out.println(BibtexCleaner.bibtexEntryToString(dblpQuery.getEntryByIndex(i)
-										     .getFirst()));
+				r[i + 1] = dblpQuery.getEntryByIndex(i).getFirst();
 			    }
-			    System.out.println(" Which one should we use? Press ENTER to use old entry...");
-			    Scanner sysoIn = new Scanner(System.in);
-			    String answer = sysoIn.nextLine();
-			    if (answer.isEmpty()) {
-				System.out.println(" Using old entry");
-				BibtexFile bibtexFile;
-				if (BibtexCleaner.isCrossrefType(entry)) {
-				    bibtexFile = newCrossrefbibtex;
-				} else {
-				    bibtexFile = newbibtex;
-				}
-				if (!knownKeys.contains(entry.getEntryKey())) {
-				    bibtexFile.addEntry(newbibtex
-							.makeToplevelComment("NOT CLEANED ENTRY (by user choice):"));
-				    bibtexFile.addEntry(entry);
-				}
-				continue;
-			    } else {
-				int correctIndex = Integer.parseInt(answer);
-				System.out.println(" Using entry at index " + correctIndex);
-				firstMatch = dblpQuery.getEntryByIndex(correctIndex);
-				//FIXME entry not added
-			    }
+			    rememberedEntries.add(r);			    
 			} else if (dblpQuery.getNrOfResults() == 0) {
 			    //No results found, can not improve
 			    System.out.println(" No results found, copying old entry to new bibtex file");
@@ -240,6 +218,62 @@ public class BibtexCleaner {
 		    break;
 		}
 	    }
+
+	    for (int e = 0; e < rememberedEntries.size(); e++) {
+		BibtexEntry[] rlist = rememberedEntries.elementAt(e);
+		System.out.println(" We got too many results, please choose the best option.");
+		System.out.println(" Original: ");
+		System.out.println(BibtexCleaner.bibtexEntryToString(rlist[0]));
+		for (int i = 1; i < rlist.length; i++) {
+		    System.out.println(" SUGGESTION " + i + ":");
+		    System.out.println(BibtexCleaner.bibtexEntryToString(rlist[i]));
+		}
+		System.out.println(" Which one should we use? Press ENTER to use old entry...");
+		Scanner sysoIn = new Scanner(System.in);
+		String answer = sysoIn.nextLine();
+		if (answer.isEmpty()) {
+		    System.out.println(" Using old entry");
+		    BibtexFile bibtexFile;
+		    if (BibtexCleaner.isCrossrefType(rlist[0])) {
+			bibtexFile = newCrossrefbibtex;
+		    } else {
+			bibtexFile = newbibtex;
+		    }
+		    if (!knownKeys.contains(rlist[0].getEntryKey())) {
+			bibtexFile.addEntry(newbibtex.makeToplevelComment("NOT CLEANED ENTRY (by user choice):"));
+			bibtexFile.addEntry(rlist[0]);
+		    }
+		    continue;
+		} else {
+		    int correctIndex = Integer.parseInt(answer);
+		    System.out.println(" Using entry at index " + correctIndex);
+
+		    nrEntriesCleaned++;
+
+		    //Update key of DBLP entry to original key
+		    BibtexEntry newEntry = rlist[correctIndex];
+		    newEntry.addFieldValue("DBLPkey", newbibtex.makeString(newEntry.getEntryKey()));
+		    newEntry.setEntryKey(rlist[0].getEntryKey());
+
+		    //Add fields of original entry to the new entry if not contained
+		    for (String fieldKey : rlist[0].getFields().keySet()) {
+			if (!newEntry.getFields().containsKey(fieldKey)) {
+			    newEntry.addFieldValue(fieldKey, rlist[0].getFieldValue(fieldKey));
+			}
+		    }
+
+		    //Add new entry to new bibtex
+		    if (!knownKeys.contains(newEntry.getEntryKey())) {
+			System.out.println(" Adding new entry ");
+			if (BibtexCleaner.isCrossrefType(newEntry)) {
+			    newCrossrefbibtex.addEntry(newEntry);
+			} else {
+			    newbibtex.addEntry(newEntry);
+			}
+		    }
+		}
+	    }
+
 
 	    /*
 	     * Save the new bibtex file
