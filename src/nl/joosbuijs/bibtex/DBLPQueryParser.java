@@ -178,20 +178,25 @@ public class DBLPQueryParser {
 	 * @return
 	 */
 	public String[] parseDocumentForTag(String url, String tag) {
+		int retries = 0;
 		try {
 			waitForQueryTime();
-			org.jsoup.nodes.Document doc;
-			try {
+			org.jsoup.nodes.Document doc = null;
+			while (retries < 31 && doc == null) {
+			    try {
 				doc = Jsoup.connect(url).get();
-			} catch (SocketTimeoutException ste) {
-				//Just try again after a second
-				System.out.println(" URL read timeout, trying again in 1 sec...");
+			    } catch (SocketTimeoutException ste) {
+				System.out.println(" URL read timeout, trying again in " + retries + " sec...");
 				try {
-					Thread.sleep(1000);
+				    Thread.sleep(1000);
 				} catch (InterruptedException e) {
-					e.printStackTrace();
+				    e.printStackTrace();
 				}
-				doc = Jsoup.connect(url).get();
+				retries++;
+			    }
+			}
+			if (doc == null) {
+			    return new String[0];
 			}
 			Elements elements = doc.select(tag);
 
