@@ -11,6 +11,10 @@ import java.util.HashSet;
 import java.util.Scanner;
 import java.util.Set;
 import java.util.Vector;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Collections;
+import java.util.Comparator;
 
 import org.joda.time.DateTime;
 
@@ -39,9 +43,43 @@ import bibtex.parser.ParseException;
  */
 public class BibtexCleaner {
 
-    public static int maxNrEntries2Parse = -1;//10;
+    static class EntryComp implements Comparator<BibtexAbstractEntry> {
+	public int compare(BibtexAbstractEntry o1, BibtexAbstractEntry o2) {
+	    if (o1 instanceof BibtexEntry && o2 instanceof BibtexEntry) {
+		return ((BibtexEntry)o1).getEntryKey().compareTo(((BibtexEntry)o2).getEntryKey());
+	    } else if (o1 instanceof BibtexEntry) {
+		return -1;
+	    } else if (o2 instanceof BibtexEntry) {
+		return 1;
+	    } else {
+		return 0;
+	    }
+	}
+	public boolean equals(BibtexAbstractEntry o1, BibtexAbstractEntry o2) {
+	    if (o1 instanceof BibtexEntry && o2 instanceof BibtexEntry) {
+		return ((BibtexEntry)o1).getEntryKey().equals(((BibtexEntry)o2).getEntryKey());
+	    } else if (o1 instanceof BibtexEntry) {
+		return false;
+	    } else if (o2 instanceof BibtexEntry) {
+		return false;
+	    } else {
+		return true;
+	    }
+	}
+    }
 
+    public static int maxNrEntries2Parse = -1;//10;
+    public static Set<String> keys = new HashSet<String>();
     public static int AUTHORS_IN_QUERY_MAX_ELEMENTS = 10; //manifesto causes a HTTP 414 error: URL too long :D
+
+    public static void prepareKeys(BibtexFile file) {
+	keys.clear();
+	for (BibtexAbstractEntry potentialEntry : file.getEntries()) {
+	    if (potentialEntry instanceof BibtexEntry) {
+		keys.add(((BibtexEntry) potentialEntry).getEntryKey().toLowerCase());
+	    }
+	}
+    }
 
     public static void SaveFiles(String sourceBibFile, BibtexFile newbibtex, BibtexFile newCrossrefbibtex) throws FileNotFoundException {
 	String newBibFile = sourceBibFile.replace(".bib", "_cleaned.bib");
@@ -58,8 +96,8 @@ public class BibtexCleaner {
     //TODO: add option to escape special characters (% #) in url and doi fields
 
     public static void main(String... strings) {
-	if (strings.length != 1) {
-	    System.err.println("\nMust pass input bibtex file as only argument");
+	if (strings.length < 1 || strings.length > 2) {
+	    System.err.println("\nMust pass input bibtex file as first argument, and optionally a restricted file as second");
 	    return;
 	}
 	Set<String> knownKeys = new HashSet<String>();
@@ -76,6 +114,12 @@ public class BibtexCleaner {
 
 	    System.out.println("loaded dirty Bibtex file " + sourceBibFile);
 
+	    if (strings.length == 2) {
+		BibtexFile rfile = new BibtexFile();
+		(new BibtexParser(false)).parse(rfile, new FileReader(strings[1]));
+		prepareKeys(rfile);
+	    }
+
 	    /*
 	     * Create a the new bibtex file
 	     */
@@ -87,8 +131,12 @@ public class BibtexCleaner {
 	     */
 	    DBLPQueryParser dblpQuery = new DBLPQueryParser();
 	    Vector<BibtexEntry[]> rememberedEntries = new Vector<BibtexEntry[]>();
-	    
-	    System.out.println("There are " + file.getEntries().size() + " entries to parse");
+
+	    if (strings.length == 1) {
+		System.out.println("There are " + file.getEntries().size() + " entries to parse");
+	    } else if (strings.length == 2) {
+		System.out.println("There are " + keys.size() + " entries to parse");
+	    }
 
 	    System.out.println("We expect to finish around "
 			       + DateTime.now().plusSeconds(2 * Math.min(maxNrEntries2Parse > 0 ? maxNrEntries2Parse : Integer.MAX_VALUE, file
@@ -102,11 +150,18 @@ public class BibtexCleaner {
 	    newCrossrefbibtex.addEntry(newCrossrefbibtex.makeToplevelComment("%%Crossreference bibtex file!"));
 
 	    int nrEntriesCleaned = 0;
-	    for (BibtexAbstractEntry potentialEntry : file.getEntries()) {
+	    ArrayList<BibtexAbstractEntry> entries = new ArrayList<BibtexAbstractEntry>();
+	    entries.addAll(file.getEntries());
+	    Collections.sort(entries, new EntryComp());
+	    for (BibtexAbstractEntry potentialEntry : entries) {
 		SaveFiles(sourceBibFile, newbibtex, newCrossrefbibtex); // always save files again
 		if (potentialEntry instanceof BibtexEntry) {
+		    BibtexEntry entry = (BibtexEntry) potentialEntry;
+		    if (strings.length == 2 && !keys.contains(entry.getEntryKey().toLowerCase())) {
+			System.out.println("Skipping entry " + entry.getEntryKey());
+			continue;
+		    }
 		    try {
-			BibtexEntry entry = (BibtexEntry) potentialEntry;
 			System.out.println("Cleaning entry " + entry.getEntryKey());
 
 			//Find matching entry on DBLP
@@ -120,19 +175,7 @@ public class BibtexCleaner {
 			    firstMatch = dblpQuery.getFirstEntryForQuery(entry.getFieldValue("title").toString() + " "
 									 + BibtexCleaner.getAuthorNames(entry));
 
-			    if (dblpQuery.getNrOfResults() > 10) {
-				System.out.println(" There were too many results. Using old entry...");
-				BibtexFile bibtexFile;
-				if (BibtexCleaner.isCrossrefType(entry)) {
-				    bibtexFile = newCrossrefbibtex;
-				} else {
-				    bibtexFile = newbibtex;
-				}
-				bibtexFile.addEntry(newbibtex.makeToplevelComment("NOT CLEANED ENTRY (too many results):"));
-				bibtexFile.addEntry(entry);
-				continue;
-
-			    } else if (dblpQuery.getNrOfResults() == 0) {
+			    if (dblpQuery.getNrOfResults() == 0) {
 				System.out.println(" Executing title query only and let user pick");
 				firstMatch = dblpQuery.getFirstEntryForQuery(entry.getFieldValue("title").toString());
 			    }
@@ -147,8 +190,11 @@ public class BibtexCleaner {
 			    } else {
 				bibtexFile = newbibtex;
 			    }
-			    bibtexFile.addEntry(newbibtex.makeToplevelComment("NOT CLEANED ENTRY (too many results):"));
-			    bibtexFile.addEntry(entry);
+			    if (!knownKeys.contains(entry.getEntryKey())) {
+				bibtexFile.addEntry(newbibtex.makeToplevelComment("NOT CLEANED ENTRY (too many results):"));
+				bibtexFile.addEntry(entry);
+				knownKeys.add(entry.getEntryKey().toLowerCase());
+			    }
 			    continue;
 			}
 			if (dblpQuery.getNrOfResults() > 1) {
@@ -158,7 +204,7 @@ public class BibtexCleaner {
 			    for (int i = 0; i < dblpQuery.getNrOfResults(); i++) {
 				r[i + 1] = dblpQuery.getEntryByIndex(i).getFirst();
 			    }
-			    rememberedEntries.add(r);			    
+			    rememberedEntries.add(r);
 			} else if (dblpQuery.getNrOfResults() == 0) {
 			    //No results found, can not improve
 			    System.out.println(" No results found, copying old entry to new bibtex file");
@@ -172,16 +218,23 @@ public class BibtexCleaner {
 			    if (!knownKeys.contains(entry.getEntryKey())) {
 				bibtexFile.addEntry(newbibtex.makeToplevelComment("NOT CLEANED ENTRY:"));
 				bibtexFile.addEntry(entry);
+				knownKeys.add(entry.getEntryKey().toLowerCase());
 			    }
 			    continue;
 			} else {
-
 			    nrEntriesCleaned++;
 
 			    //Update key of DBLP entry to original key
 			    BibtexEntry newEntry = firstMatch.getFirst();
+			    if (knownKeys.contains(entry.getEntryKey().toLowerCase())
+				|| knownKeys.contains(newEntry.getEntryKey().toLowerCase())) {
+				System.out.println("Duplicate, skipping...");
+				continue;
+			    }
+			    knownKeys.add(newEntry.getEntryKey().toLowerCase());
+			    knownKeys.add(entry.getEntryKey().toLowerCase());
 			    newEntry.addFieldValue("DBLPkey", newbibtex.makeString(newEntry.getEntryKey()));
-			    newEntry.setEntryKey(entry.getEntryKey());
+			    newEntry.setEntryKey(entry.getEntryKey());						   
 
 			    //Add fields of original entry to the new entry if not contained
 			    for (String fieldKey : entry.getFields().keySet()) {
@@ -242,6 +295,7 @@ public class BibtexCleaner {
 		    if (!knownKeys.contains(rlist[0].getEntryKey())) {
 			bibtexFile.addEntry(newbibtex.makeToplevelComment("NOT CLEANED ENTRY (by user choice):"));
 			bibtexFile.addEntry(rlist[0]);
+			knownKeys.add(rlist[0].getEntryKey().toLowerCase());
 		    }
 		    continue;
 		} else {
@@ -252,6 +306,13 @@ public class BibtexCleaner {
 
 		    //Update key of DBLP entry to original key
 		    BibtexEntry newEntry = rlist[correctIndex];
+		    if (knownKeys.contains(rlist[0].getEntryKey().toLowerCase())
+			|| knownKeys.contains(newEntry.getEntryKey().toLowerCase())) {
+			System.out.println("Duplicate, skipping...");
+			continue;
+		    }
+		    knownKeys.add(newEntry.getEntryKey().toLowerCase());
+		    knownKeys.add(rlist[0].getEntryKey().toLowerCase());
 		    newEntry.addFieldValue("DBLPkey", newbibtex.makeString(newEntry.getEntryKey()));
 		    newEntry.setEntryKey(rlist[0].getEntryKey());
 

@@ -186,9 +186,9 @@ public class DBLPQueryParser {
 			    try {
 				doc = Jsoup.connect(url).get();
 			    } catch (SocketTimeoutException ste) {
-				System.out.println(" URL read timeout, trying again in " + retries + " sec...");
+				System.out.println(" URL read timeout, trying again in " + (retries + 1) + " sec...");
 				try {
-				    Thread.sleep(1000);
+				    Thread.sleep(1000 * (retries + 1));
 				} catch (InterruptedException e) {
 				    e.printStackTrace();
 				}
